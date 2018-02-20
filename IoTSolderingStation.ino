@@ -1,10 +1,11 @@
 
+#include "MAX31856.h"
 #include <Wire.h>
 #include <SSD1306.h>
 #include "RotaryEncoder.h"
 //#include <U8g2lib.h>
 #include "esp_attr.h"
-#include <Adafruit_MAX31856.h>
+//#include <Adafruit_MAX31856.h>
 #include <SPI.h>
 
 // https://github.com/ThingPulse/esp8266-oled-ssd1306
@@ -15,16 +16,20 @@
 #define ROTARY_A 25
 #define ROTARY_B 26
 
+SPIClass hspi(HSPI);
 //U8G2_SSD1306_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE, OLED_CLOCK, OLED_DATA);
 SSD1306 display2(0x3c, 5, 4);
 RotaryEncoder rotary(ROTARY_A, ROTARY_B, 5, 10, 1000 / 10, 1000 / 5);
-Adafruit_MAX31856 tempReader(2,13,12,14);
+// Use software SPI: CS
+MAX31856 tempReader(2, &hspi);
 
 unsigned int count = 0;
 
 void setup()
 {
 	Serial.begin(115200);
+
+	Serial.println("start");
 
 	//display.setI2CAddress(0x3c);
 	//display.begin();
@@ -40,25 +45,8 @@ void setup()
 	digitalWrite(ROTARY_B, HIGH);
 	attachInterrupt(digitalPinToInterrupt(ROTARY_A), handleInterruptRotary, CHANGE);
 	attachInterrupt(digitalPinToInterrupt(ROTARY_B), handleInterruptRotary, CHANGE);
-	
-	tempReader.begin();
-	tempReader.setThermocoupleType(MAX31856_TCTYPE_K);
 
-	Serial.print("Thermocouple type: ");
-	switch (tempReader.getThermocoupleType()) {
-	case MAX31856_TCTYPE_B: Serial.println("B Type"); break;
-	case MAX31856_TCTYPE_E: Serial.println("E Type"); break;
-	case MAX31856_TCTYPE_J: Serial.println("J Type"); break;
-	case MAX31856_TCTYPE_K: Serial.println("K Type"); break;
-	case MAX31856_TCTYPE_N: Serial.println("N Type"); break;
-	case MAX31856_TCTYPE_R: Serial.println("R Type"); break;
-	case MAX31856_TCTYPE_S: Serial.println("S Type"); break;
-	case MAX31856_TCTYPE_T: Serial.println("T Type"); break;
-	case MAX31856_VMODE_G8: Serial.println("Voltage x8 Gain mode"); break;
-	case MAX31856_VMODE_G32: Serial.println("Voltage x8 Gain mode"); break;
-	default: Serial.println("Unknown"); break;
-	}
-
+	Serial.println("GUI");
 
 	xTaskCreate(
 		taskLoop,          /* Task function. */
@@ -68,13 +56,33 @@ void setup()
 		1,                /* Priority of the task. */
 		NULL);            /* Task handle. */
 
-	Serial.println("Muh");
+	Serial.println("start MAX31856");
+	tempReader.Begin();
+	//tempReader.setThermocoupleType(MAX31856_TCTYPE_K);
+
+	Serial.print("Thermocouple type: ");
+	switch (tempReader.getThermocoupleType()) {
+	case TCTYPE_B: Serial.println("B Type"); break;
+	case TCTYPE_E: Serial.println("E Type"); break;
+	case TCTYPE_J: Serial.println("J Type"); break;
+	case TCTYPE_K: Serial.println("K Type"); break;
+	case TCTYPE_N: Serial.println("N Type"); break;
+	case TCTYPE_R: Serial.println("R Type"); break;
+	case TCTYPE_S: Serial.println("S Type"); break;
+	case TCTYPE_T: Serial.println("T Type"); break;
+	case VMODE_G8: Serial.println("Voltage x8 Gain mode"); break;
+	case VMODE_G32: Serial.println("Voltage x8 Gain mode"); break;
+	default: Serial.println("Unknown"); break;
+	}
+
 }
 
 void loop() {
-	Serial.print("Cold Junction Temp: "); Serial.println(tempReader.readCJTemperature());
+	Serial.print("Cold Junction Temp: ");
+	Serial.println(tempReader.readCJTemperature());
 
-	Serial.print("Thermocouple Temp: "); Serial.println(tempReader.readThermocoupleTemperature());
+	Serial.print("Thermocouple Temp: ");
+	Serial.println(tempReader.readThermocoupleTemperature());
 	// Check and print any faults
 	uint8_t fault = tempReader.readFault();
 	if (fault) {
