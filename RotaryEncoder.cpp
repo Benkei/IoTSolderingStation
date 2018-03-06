@@ -22,7 +22,8 @@ const int8_t KNOBDIR[] = {
 	0, -1,  1,  0,
 	1,  0,  0, -1,
 	-1,  0,  0,  1,
-	0,  1, -1,  0 };
+	0,  1, -1,  0
+};
 
 
 // positions: [3] 1 0 2 [3] 1 0 2 [3]
@@ -33,9 +34,8 @@ const int8_t KNOBDIR[] = {
 
 // ----- Initialization and Default Values -----
 
-RotaryEncoder::RotaryEncoder(int pin1, int pin2,
-	unsigned long stepMid, unsigned long stepHi,
-	unsigned long maxSpeedMid, unsigned long maxSpeedHi) {
+RotaryEncoder::RotaryEncoder(int pin1, int pin2)
+{
 	// Remember Hardware Setup
 	_pin1 = pin1;
 	_pin2 = pin2;
@@ -46,18 +46,19 @@ RotaryEncoder::RotaryEncoder(int pin1, int pin2,
 	// start with position 0;
 	_position = 0;
 	_positionExt = 0;
-	_positionVExt = 0;
 
 	_lastTime = 0;
 
-	_stepMid = stepMid;
-	_stepHi = stepHi;
-
-	_maxSpeedMid = maxSpeedMid;
-	_maxSpeedHi = maxSpeedHi;
+	_stepMid = 0;
+	_stepHi = 0;
+	_velocityMid = 0;
+	_velocityHi = 0;
+	_minPosition = -100;
+	_maxPosition = 100;
 }
 
-void RotaryEncoder::begin() {
+void RotaryEncoder::begin()
+{
 	// Setup the input pins
 	pinMode(_pin1, INPUT);
 	digitalWrite(_pin1, HIGH);   // turn on pullup resistor
@@ -66,19 +67,30 @@ void RotaryEncoder::begin() {
 	digitalWrite(_pin2, HIGH);   // turn on pullup resistor
 }
 
-long RotaryEncoder::getPosition() {
+void RotaryEncoder::setup(
+	unsigned long stepMid, unsigned long stepHi,
+	unsigned long velocityMid, unsigned long velocityHi,
+	long minPosition, long maxPosition)
+{
+	_stepMid = stepMid;
+	_stepHi = stepHi;
+	_velocityMid = velocityMid;
+	_velocityHi = velocityHi;
+	_minPosition = minPosition;
+	_maxPosition = maxPosition;
+}
+
+long RotaryEncoder::getPosition()
+{
 	return _positionExt;
 }
 
-long RotaryEncoder::getPositionV() {
-	return _positionVExt;
-}
-
-void RotaryEncoder::setPosition(long newPosition) {
+void RotaryEncoder::setPosition(long newPosition)
+{
+	newPosition = constrain(newPosition, _minPosition, _maxPosition);
 	// only adjust the external part of the position.
 	_position = ((newPosition << 2) | (_position & 0x03L));
 	_positionExt = newPosition;
-	_positionVExt = newPosition;
 }
 
 void RotaryEncoder::tick(unsigned long time)
@@ -87,31 +99,37 @@ void RotaryEncoder::tick(unsigned long time)
 	int sig2 = digitalRead(_pin2);
 	int8_t thisState = sig1 | (sig2 << 1);
 	unsigned long speed;
-	long pos;
+	long pos, delta;
 
-	if (_oldState != thisState) {
+	if (_oldState != thisState)
+	{
 		_position += KNOBDIR[thisState | (_oldState << 2)];;
 
-		if (thisState == LATCHSTATE) {
+		if (thisState == LATCHSTATE)
+		{
 			pos = _position >> 2;
-
-			if (_positionExt != pos) {
-
+			if (_positionExt != pos)
+			{
 				speed = time - _lastTime;
 				_lastTime = time;
 
-				unsigned long step = 1;
-				if (speed < _maxSpeedMid) {
-					if (speed < _maxSpeedHi) {
-						step = _stepHi;
+				if (speed < _velocityMid)
+				{
+					unsigned long step = 0;
+					if (speed < _velocityHi)
+					{
+						step = _stepHi - 1;
 					}
-					else {
-						step = _stepMid;
+					else
+					{
+						step = _stepMid - 1;
 					}
+					pos += _positionExt > pos ? -step : step;
 				}
-				_positionVExt += _positionExt > pos ? -step : step;
-				_positionExt = pos;
 			}
+			pos = constrain(pos, _minPosition, _maxPosition);
+			_positionExt = pos;
+			_position = (pos << 2) | (_position & 0b11);
 		}
 
 		_oldState = thisState;

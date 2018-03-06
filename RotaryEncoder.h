@@ -25,15 +25,17 @@ class RotaryEncoder
 {
 public:
 	// ----- Constructor -----
-	RotaryEncoder(int pin1, int pin2,
-		unsigned long stepMid, unsigned long stepHi,
-		unsigned long maxSpeedMid, unsigned long maxSpeedHi);
+	RotaryEncoder(int pin1, int pin2);
 
 	void begin();
 
+	void setup(
+		unsigned long stepMid, unsigned long stepHi,
+		unsigned long velocityMid, unsigned long velocityHi,
+		long minPosition, long maxPosition);
+
 	// retrieve the current position
 	long getPosition();
-	long getPositionV();
 
 	// adjust the current position
 	void setPosition(long newPosition);
@@ -48,14 +50,14 @@ private:
 
 	long _position;     // Internal position (4 times _positionExt)
 	long _positionExt;  // External position
-	long _positionVExt;  // External position
+	long _minPosition, _maxPosition;
 
 	unsigned long _lastTime;
 
 	unsigned long _stepMid;
 	unsigned long _stepHi;
-	unsigned long _maxSpeedMid;
-	unsigned long _maxSpeedHi;
+	unsigned long _velocityMid;
+	unsigned long _velocityHi;
 };
 
 #endif
