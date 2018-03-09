@@ -53,18 +53,15 @@ int32_t MAX31856::GetConversionTime()
 void MAX31856::SetConversionMode(const ConversionMode mode)
 {
 	conversionCount = 0;
+	config0 = (CR0)(config0 & ~ConversionMode::_MASK); // mask off
+	config0 = (CR0)(config0 | mode);
 	calculateDelayTime();
-	uint8_t read = readRegister8(MAX31856_CR0_REG);
-	read &= ~ConversionMode::_MASK; // mask off
-	read |= mode;
-	writeRegister8(MAX31856_CR0_REG, read);
+	SetConfiguration0Flags(config0);
 }
 
 ConversionMode MAX31856::GetConversionMode()
 {
-	uint8_t read = readRegister8(MAX31856_CR0_REG);
-	read &= ConversionMode::_MASK; // mask off first 3 bits
-	return (ConversionMode)read;
+	return (ConversionMode)(config0 & ConversionMode::_MASK); // mask off first 3 bits
 }
 
 

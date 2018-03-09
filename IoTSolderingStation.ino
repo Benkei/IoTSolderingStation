@@ -1,7 +1,7 @@
 
+#include <U8x8lib.h>
+#include <U8g2lib.h>
 #include "MAX31856.h"
-#include <Wire.h>
-#include <SSD1306.h>
 #include "RotaryEncoder.h"
 #include "esp_attr.h"
 #include <SPI.h>
@@ -9,17 +9,25 @@
 // https://github.com/ThingPulse/esp8266-oled-ssd1306
 // https://github.com/adafruit/Adafruit_MAX31856
 
-#define OLED_CLOCK 4
-#define OLED_DATA 5
-#define ROTARY_A 25
-#define ROTARY_B 26
-#define HEAT_PIN 16
+#define ROTARY_A GPIO_NUM_27
+#define ROTARY_B GPIO_NUM_26
+
+#define HEAT_PIN GPIO_NUM_25
+
+#define OLED_CS GPIO_NUM_2 
+#define OLED_DC GPIO_NUM_0 
+#define OLED_RESET GPIO_NUM_15 
+
+#define MAX31856_CS GPIO_NUM_4
+#define MAX31856_DRDY GPIO_NUM_16
+
 
 SPIClass hspi(HSPI);
-SSD1306 display(0x3c, 5, 4);
+U8G2_SSD1306_128X64_NONAME_F_4W_HW_SPI display(U8G2_R0, OLED_CS, OLED_DC, OLED_RESET);
+//SSD1306 display(0x3c, 5, 4);
 RotaryEncoder rotary(ROTARY_A, ROTARY_B);
 // Use software SPI: CS
-MAX31856 tempReader(2, hspi);
+MAX31856 tempReader(MAX31856_CS, hspi);
 
 volatile float tcTemp = 0;
 volatile float cjTemp = 0;
@@ -37,25 +45,18 @@ void setup()
 
 	rotary.begin();
 	rotary.setup(5, 10, 1000 / 10, 1000 / 5, 0, 400);
-	pinMode(ROTARY_A, INPUT_PULLUP);
-	digitalWrite(ROTARY_A, HIGH);
-	pinMode(ROTARY_B, INPUT_PULLUP);
-	digitalWrite(ROTARY_B, HIGH);
-	attachInterrupt(digitalPinToInterrupt(ROTARY_A), handleInterruptRotary, CHANGE);
-	attachInterrupt(digitalPinToInterrupt(ROTARY_B), handleInterruptRotary, CHANGE);
 
 	pinMode(HEAT_PIN, OUTPUT);
 	digitalWrite(HEAT_PIN, LOW);
 
 
-	pinMode(15, INPUT);
+	pinMode(MAX31856_DRDY, INPUT);
 
 	//start and configure hardware SPI
 	hspi.begin();
 
-	display.init();
-	display.flipScreenVertically();
-	display.setFont(ArialMT_Plain_10);
+	display.begin();
+	display.setFont(u8g2_font_6x10_mf);
 
 	tempReader.begin();
 	Serial.print("Thermocouple type: ");
@@ -75,6 +76,14 @@ void setup()
 	}
 
 	xTaskCreate(
+		taskRotary,
+		"taskRotary",
+		1000,
+		NULL,
+		3,
+		NULL);
+
+	xTaskCreate(
 		taskDisplayRender,          /* Task function. */
 		"taskLoop",        /* String with name of task. */
 		10000,            /* Stack size in words. */
@@ -85,7 +94,7 @@ void setup()
 	xTaskCreate(
 		taskTipControl,          /* Task function. */
 		"taskTipControl",        /* String with name of task. */
-		10000,            /* Stack size in words. */
+		1000,            /* Stack size in words. */
 		NULL,             /* Parameter passed as input of the task */
 		1,                /* Priority of the task. */
 		NULL);            /* Task handle. */
@@ -94,11 +103,24 @@ void setup()
 void loop()
 {}
 
+void taskRotary(void* params)
+{
+	while (1)
+	{
+		rotary.tick(millis());
+		vTaskDelay(1 / portTICK_RATE_MS);
+	}
+	vTaskDelete(NULL);
+}
+
 volatile uint32_t tempTime = 0;
 void taskTipControl(void* params)
 {
 	Serial.println("Start tip control task");
 	Serial.println("Tip temp time " + String(tempReader.GetConversionTime()) + "ms");
+
+	unsigned long tf = 0;
+	unsigned long tflast = 0;
 
 	while (1)
 	{
@@ -107,50 +129,12 @@ void taskTipControl(void* params)
 		{
 			digitalWrite(HEAT_PIN, LOW);
 			Serial.println("stop temp");
-			vTaskDelay((1 * 20) / portTICK_RATE_MS);
+			vTaskDelay(tflast / portTICK_RATE_MS);
 		}
 
-		Serial.println("begin temp " + String(!digitalRead(15)));
+		boolean hasTemp = digitalRead(MAX31856_DRDY) == LOW;
 
-		if (tipTempTarget > tcTemp)
-		{
-			// stop cold junction messurment
-			tempReader.SetConfiguration0Flags(
-				(CR0)(CR0::OC_DETECT_DISABLED
-					| CR0::COLD_JUNC_DISABLE
-					| CR0::FAULT_MODE_COMPARATOR
-					| CR0::FAULTCLR_DEFAULT_VAL
-					| CR0::FILTER_OUT_50Hz)
-			);
-		}
-		else
-		{
-			tempReader.SetConfiguration0Flags(
-				(CR0)(CR0::OC_DETECT_ENABLED_R_LESS_5k
-					| CR0::COLD_JUNC_ENABLE
-					| CR0::FAULT_MODE_COMPARATOR
-					| CR0::FAULTCLR_DEFAULT_VAL
-					| CR0::FILTER_OUT_50Hz)
-			);
-		}
-		tempReader.SetConversionMode(ConversionMode::OneShot);
-
-		uint32_t t = millis();
-		while (digitalRead(15))
-		{
-			//Serial.println("wait temp " + String(!digitalRead(15)));
-			vTaskDelay(1);
-		}
-		t = millis() - t;
-		tempTime = t;
-		Serial.println("end temp " + String(t) + " " + String(tempReader.GetConversionMode()));
-
-		//vTaskDelay(tempReader.GetConversionTime() / portTICK_RATE_MS);
-
-		tempReader.SetConversionMode(ConversionMode::Off);
-
-		tcTemp = tempReader.readTCTemperature();
-		cjTemp = tempReader.readCJTemperature();
+		Serial.println("begin temp " + String(hasTemp));
 
 		// Check and print any faults
 		uint8_t fault = tempReader.readFault();
@@ -166,9 +150,70 @@ void taskTipControl(void* params)
 			if (fault & MAX31856_FAULT_OVUV)    Serial.println("Over/Under Voltage Fault");
 			if (fault & MAX31856_FAULT_OPEN)    Serial.println("Thermocouple Open Fault");
 
+			if (tf == 0 && fault & MAX31856_FAULT_OVUV)
+				tf = millis();
 			//if (fault & MAX31856_FAULT_OPEN)
 			continue;
 		}
+
+		if (tf != 0)
+		{
+			tf = millis() - tf;
+			Serial.println("fault time " + String(tf) + "ms");
+			tflast = max(tflast, tf) * 2;
+			tf = 0;
+		}
+
+
+		if (!hasTemp)
+		{
+			if (tipTempTarget > tcTemp)
+			{
+				// stop cold junction messurment
+				tempReader.SetConfiguration0Flags(
+					(CR0)(CR0::OC_DETECT_DISABLED
+						| CR0::COLD_JUNC_DISABLE
+						| CR0::FAULT_MODE_COMPARATOR
+						| CR0::FAULTCLR_DEFAULT_VAL
+						| CR0::FILTER_OUT_50Hz)
+				);
+			}
+			else
+			{
+				tempReader.SetConfiguration0Flags(
+					(CR0)(CR0::OC_DETECT_ENABLED_TC_LESS_2ms
+						| CR0::COLD_JUNC_ENABLE
+						| CR0::FAULT_MODE_COMPARATOR
+						| CR0::FAULTCLR_DEFAULT_VAL
+						| CR0::FILTER_OUT_50Hz)
+				);
+			}
+			tempReader.SetConversionMode(ConversionMode::OneShot);
+
+			unsigned long t = millis();
+			while (!hasTemp)
+			{
+				//Serial.println("wait temp");
+				vTaskDelay(1);
+				hasTemp = digitalRead(MAX31856_DRDY) == LOW;
+
+				if (millis() - t > 1000)
+				{
+					break;
+				}
+			}
+			t = millis() - t;
+			tempTime = t;
+
+			//vTaskDelay(tempReader.GetConversionTime() / portTICK_RATE_MS);
+
+			tempReader.SetConversionMode(ConversionMode::Off);
+
+			Serial.println("end temp " + String(t) + " " + String(tempReader.GetConversionMode()));
+		}
+
+		tcTemp = tempReader.readTCTemperature();
+		cjTemp = tempReader.readCJTemperature();
 
 		if (tipTempTarget > tcTemp)
 		{
@@ -204,19 +249,19 @@ void taskDisplayRender(void* params)
 
 	while (1)
 	{
-		time = micros();
+		time = millis();
 
-		display.clear();
+		display.clearBuffer();
 
-		display.drawString(0, 10, "dtime: " + String(dtime));
-		display.drawString(0, 21, String(tempTime) + "ms");
-		display.drawString(0, 34, "Temp: " + String(tcTemp) + " " + String(cjTemp));
-		display.drawString(0, 46, "Target Temp: " + String(rotary.getPosition()));
+		display.drawStr(0, 10, ("dtime: " + String(dtime)).c_str());
+		display.drawStr(0, 21, (String(tempTime) + "ms").c_str());
+		display.drawStr(0, 34, ("Temp: " + String(tcTemp) + " " + String(cjTemp)).c_str());
+		display.drawStr(0, 46, ("Target Temp: " + String(rotary.getPosition())).c_str());
 
-		display.display();
+		display.sendBuffer();
 
 
-		dtime = micros() - time;
+		dtime = millis() - time;
 
 		vTaskDelay(33 / portTICK_RATE_MS);
 	}
@@ -224,7 +269,3 @@ void taskDisplayRender(void* params)
 	vTaskDelete(NULL);
 }
 
-void IRAM_ATTR handleInterruptRotary()
-{
-	rotary.tick(millis());
-}
