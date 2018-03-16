@@ -1,4 +1,5 @@
 
+#include <PID_v1.h>
 #include <U8x8lib.h>
 #include <U8g2lib.h>
 #include "MAX31856.h"
@@ -28,6 +29,16 @@ U8G2_SSD1306_128X64_NONAME_F_4W_HW_SPI display(U8G2_R0, OLED_CS, OLED_DC, OLED_R
 RotaryEncoder rotary(ROTARY_A, ROTARY_B);
 // Use software SPI: CS
 MAX31856 tempReader(MAX31856_CS, hspi);
+
+
+double Setpoint, Input, Output;
+double Kp = 2, Ki = 5, Kd = 1;
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+
+int WindowSize = 200;
+unsigned long windowStartTime;
+
+volatile bool heater = false;
 
 volatile float tcTemp = 0;
 volatile float cjTemp = 0;
@@ -75,6 +86,21 @@ void setup()
 	default: Serial.println("Unknown"); break;
 	}
 
+
+
+	windowStartTime = millis();
+
+	//initialize the variables we're linked to
+	Setpoint = 0;
+
+	//tell the PID to range between 0 and the full window size
+	myPID.SetOutputLimits(0, WindowSize);
+	myPID.SetSampleTime(200);
+
+	//turn the PID on
+	myPID.SetMode(AUTOMATIC);
+
+
 	xTaskCreate(
 		taskRotary,
 		"taskRotary",
@@ -101,7 +127,32 @@ void setup()
 }
 
 void loop()
-{}
+{
+	Setpoint = tipTempTarget;
+	Input = tcTemp;
+
+	myPID.Compute();
+
+	/************************************************
+	* turn the output pin on/off based on pid output
+	************************************************/
+	if (millis() - windowStartTime > WindowSize)
+	{ //time to shift the Relay Window
+		windowStartTime += WindowSize;
+	}
+	if (Output < millis() - windowStartTime)
+	{
+		//digitalWrite(HEAT_PIN, HIGH);
+		heater = false;
+	}
+	else
+	{
+		//digitalWrite(HEAT_PIN, LOW);
+		heater = true;
+	}
+
+
+}
 
 void taskRotary(void* params)
 {
@@ -125,6 +176,8 @@ void taskTipControl(void* params)
 	while (1)
 	{
 		tipTempTarget = rotary.getPosition();
+
+
 		if (digitalRead(HEAT_PIN))
 		{
 			digitalWrite(HEAT_PIN, LOW);
@@ -152,8 +205,6 @@ void taskTipControl(void* params)
 
 			if (tf == 0 && fault & MAX31856_FAULT_OVUV)
 				tf = millis();
-			//if (fault & MAX31856_FAULT_OPEN)
-			continue;
 		}
 
 		if (tf != 0)
@@ -165,14 +216,14 @@ void taskTipControl(void* params)
 		}
 
 
-		if (!hasTemp)
+		if (!hasTemp || fault)
 		{
 			if (tipTempTarget > tcTemp)
 			{
 				// stop cold junction messurment
 				tempReader.SetConfiguration0Flags(
-					(CR0)(CR0::OC_DETECT_DISABLED
-						| CR0::COLD_JUNC_DISABLE
+					(CR0)(CR0::OC_DETECT_ENABLED_R_LESS_5k
+						| CR0::COLD_JUNC_ENABLE
 						| CR0::FAULT_MODE_COMPARATOR
 						| CR0::FAULTCLR_DEFAULT_VAL
 						| CR0::FILTER_OUT_50Hz)
@@ -181,7 +232,7 @@ void taskTipControl(void* params)
 			else
 			{
 				tempReader.SetConfiguration0Flags(
-					(CR0)(CR0::OC_DETECT_ENABLED_TC_LESS_2ms
+					(CR0)(CR0::OC_DETECT_ENABLED_R_LESS_5k
 						| CR0::COLD_JUNC_ENABLE
 						| CR0::FAULT_MODE_COMPARATOR
 						| CR0::FAULTCLR_DEFAULT_VAL
@@ -215,25 +266,19 @@ void taskTipControl(void* params)
 		tcTemp = tempReader.readTCTemperature();
 		cjTemp = tempReader.readCJTemperature();
 
-		if (tipTempTarget > tcTemp)
+		if (tipTempTarget > tcTemp && fault == 0)
 		{
-			// tip heating require
-			Serial.println("tip heating: " + String(tcTemp) + "/" + String(tipTempTarget));
+			vTaskDelay(1 / portTICK_RATE_MS);
 
 			digitalWrite(HEAT_PIN, HIGH);
 
-			int delta = sqrt(tipTempTarget - tcTemp);
+			long delta = sqrt(tipTempTarget - tcTemp);
+			long time = 40 + (delta * 200);
 
-			vTaskDelay(40 + (delta * 200) / portTICK_RATE_MS);
-		}
-		else
-		{
-			// no tip heating require
-			Serial.println("no tip heating");
+			// tip heating require
+			Serial.println("tip heating: " + String(tcTemp) + "/" + String(tipTempTarget) + " " + String(time) + "ms");
 
-			digitalWrite(HEAT_PIN, LOW);
-
-			vTaskDelay((2 * 20) / portTICK_RATE_MS);
+			vTaskDelay(time / portTICK_RATE_MS);
 		}
 	}
 
@@ -257,6 +302,7 @@ void taskDisplayRender(void* params)
 		display.drawStr(0, 21, (String(tempTime) + "ms").c_str());
 		display.drawStr(0, 34, ("Temp: " + String(tcTemp) + " " + String(cjTemp)).c_str());
 		display.drawStr(0, 46, ("Target Temp: " + String(rotary.getPosition())).c_str());
+		display.drawStr(0, 58, (String(heater) + " I: " + String(Input) + " O: " + String(Output)).c_str());
 
 		display.sendBuffer();
 
