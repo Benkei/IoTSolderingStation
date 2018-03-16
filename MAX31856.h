@@ -190,9 +190,9 @@ enum CR1
 };
 enum ConversionMode
 {
-	Off = 0b00000000,
-	Automatic = 0b01000000,
-	OneShot = 0b10000000,
+	Off = 0x00,
+	Automatic = 0x80,
+	OneShot = 0x40,
 	_MASK = 0b11000000,
 };
 
