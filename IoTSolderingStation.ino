@@ -41,9 +41,65 @@ unsigned long windowStartTime;
 volatile bool heater = false;
 
 volatile float tcTemp = 0;
+volatile float tcVoltage = 0;
+volatile float tcVoltageTarget = 0;
 volatile float cjTemp = 0;
 
 volatile uint16_t tipTempTarget = 0;
+
+
+const int16_t lutTemperatur[] = {
+	21	,
+	26	,
+	30	,
+	33	,
+	37	,
+	41	,
+	44	,
+	48	,
+	52	,
+	56	,
+	60	,
+	98	,
+	135,
+	170,
+	205,
+	233,
+	267,
+	303,
+	340,
+	380,
+	418,
+	453,
+	480,
+	500,
+};
+const int16_t lutVolt[] = {
+	0	,
+	1	,
+	2	,
+	3	,
+	4	,
+	5	,
+	6	,
+	7	,
+	8	,
+	9	,
+	10	,
+	20	,
+	30	,
+	40	,
+	50	,
+	60	,
+	70	,
+	80	,
+	90	,
+	100,
+	110,
+	121,
+	130,
+	140,
+};
 
 
 void setup()
@@ -82,7 +138,7 @@ void setup()
 	case TCTYPE_S: Serial.println("S Type"); break;
 	case TCTYPE_T: Serial.println("T Type"); break;
 	case VMODE_G8: Serial.println("Voltage x8 Gain mode"); break;
-	case VMODE_G32: Serial.println("Voltage x8 Gain mode"); break;
+	case VMODE_G32: Serial.println("Voltage x32 Gain mode"); break;
 	default: Serial.println("Unknown"); break;
 	}
 
@@ -187,7 +243,7 @@ void taskTipControl(void* params)
 
 		boolean hasTemp = digitalRead(MAX31856_DRDY) == LOW;
 
-		Serial.println("begin temp " + String(hasTemp));
+		//Serial.println("begin temp " + String(hasTemp));
 
 		// Check and print any faults
 		uint8_t fault = tempReader.readFault();
@@ -195,13 +251,17 @@ void taskTipControl(void* params)
 		if (fault)
 		{
 			if (fault & MAX31856_FAULT_CJRANGE) Serial.println("Cold Junction Range Fault");
-			if (fault & MAX31856_FAULT_TCRANGE) Serial.println("Thermocouple Range Fault");
+			// ignored in voltage mode.
+			//if (fault & MAX31856_FAULT_TCRANGE) Serial.println("Thermocouple Range Fault");
 			if (fault & MAX31856_FAULT_CJHIGH)  Serial.println("Cold Junction High Fault");
 			if (fault & MAX31856_FAULT_CJLOW)   Serial.println("Cold Junction Low Fault");
 			if (fault & MAX31856_FAULT_TCHIGH)  Serial.println("Thermocouple High Fault");
 			if (fault & MAX31856_FAULT_TCLOW)   Serial.println("Thermocouple Low Fault");
 			if (fault & MAX31856_FAULT_OVUV)    Serial.println("Over/Under Voltage Fault");
 			if (fault & MAX31856_FAULT_OPEN)    Serial.println("Thermocouple Open Fault");
+
+			// ignored in voltage mode.
+			fault &= ~MAX31856_FAULT_TCRANGE;
 
 			if (tf == 0 && fault & MAX31856_FAULT_OVUV)
 				tf = millis();
@@ -239,6 +299,8 @@ void taskTipControl(void* params)
 						| CR0::FILTER_OUT_50Hz)
 				);
 			}
+
+			//tempReader.setThermocoupleType(MAX31856_ThermocoupleType::VMODE_G8);
 			tempReader.SetConversionMode(ConversionMode::OneShot);
 
 			unsigned long t = millis();
@@ -250,6 +312,7 @@ void taskTipControl(void* params)
 
 				if (millis() - t > 1000)
 				{
+					Serial.println("temp timeout");
 					break;
 				}
 			}
@@ -260,19 +323,28 @@ void taskTipControl(void* params)
 
 			tempReader.SetConversionMode(ConversionMode::Off);
 
-			Serial.println("end temp " + String(t) + " " + String(tempReader.GetConversionMode()));
+			//Serial.println("end temp " + String(t) + " " + String(tempReader.GetConversionMode()));
 		}
 
-		tcTemp = tempReader.readTCTemperature();
+		float voltage = tempReader.readTCTemperature();
+
+
+		tcTemp = VoltageToTemperature(voltage);
+		tcVoltage = voltage;
+		tcVoltageTarget = TemperatureToVoltage(tipTempTarget);
+
+		//tcTemp = tempReader.readTCTemperature();
 		cjTemp = tempReader.readCJTemperature();
 
-		if (tipTempTarget > tcTemp && fault == 0)
+		if (tcVoltageTarget > tcVoltage && fault == 0 && tipTempTarget > 0)
+			//if (tipTempTarget > tcTemp && fault == 0 && tipTempTarget > 0)
 		{
 			vTaskDelay(1 / portTICK_RATE_MS);
 
 			digitalWrite(HEAT_PIN, HIGH);
 
-			long delta = sqrt(tipTempTarget - tcTemp);
+			//long delta = sqrt(tipTempTarget - tcTemp);
+			float delta = sqrt(tcVoltageTarget - tcVoltage);
 			long time = 40 + (delta * 200);
 
 			// tip heating require
@@ -284,6 +356,50 @@ void taskTipControl(void* params)
 
 	vTaskDelete(NULL);
 }
+
+float VoltageToTemperature(float voltage)
+{
+	int8_t idx = 0;
+	for (size_t i = 1; i < sizeof(lutVolt) / sizeof(lutVolt[0]); i++)
+	{
+		if (lutVolt[i] >= voltage)
+		{
+			idx = i - 1;
+			break;
+		}
+	}
+
+	auto range = lutVolt[idx + 1] - lutVolt[idx];
+	float delta = (voltage - lutVolt[idx]) / range;
+
+	auto rangeT = lutTemperatur[idx + 1] - lutTemperatur[idx];
+	float temp = lutTemperatur[idx] + rangeT * delta;
+
+	return temp;
+}
+
+float TemperatureToVoltage(int16_t temperatur)
+{
+	int8_t idx = 0;
+	for (size_t i = 1; i < sizeof(lutTemperatur) / sizeof(lutTemperatur[0]); i++)
+	{
+		if (lutTemperatur[i] >= temperatur)
+		{
+			idx = i - 1;
+			break;
+		}
+	}
+
+	float range = lutTemperatur[idx + 1] - lutTemperatur[idx];
+	float delta = (temperatur - lutTemperatur[idx]) / range;
+
+	auto rangeT = lutVolt[idx + 1] - lutVolt[idx];
+	float voltage = lutVolt[idx] + rangeT * delta;
+
+	return voltage;
+}
+
+
 
 void taskDisplayRender(void* params)
 {
@@ -302,7 +418,8 @@ void taskDisplayRender(void* params)
 		display.drawStr(0, 21, (String(tempTime) + "ms").c_str());
 		display.drawStr(0, 34, ("Temp: " + String(tcTemp) + " " + String(cjTemp)).c_str());
 		display.drawStr(0, 46, ("Target Temp: " + String(rotary.getPosition())).c_str());
-		display.drawStr(0, 58, (String(heater) + " I: " + String(Input) + " O: " + String(Output)).c_str());
+		display.drawStr(0, 58, ("Tip V: " + String(tcVoltage) + "/" + String(tcVoltageTarget)).c_str());
+		//display.drawStr(0, 58, (String(heater) + " I: " + String(Input) + " O: " + String(Output)).c_str());
 
 		display.sendBuffer();
 

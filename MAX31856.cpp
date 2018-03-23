@@ -29,7 +29,7 @@ void MAX31856::begin()
 	);
 
 	SetConfiguration1Flags(
-		(CR1)(CR1::AVG_TC_SAMPLES_1 | CR1::TC_TYPE_K)
+		(CR1)(CR1::AVG_TC_SAMPLES_1 | CR1::TC_TYPE_VOLT_MODE_GAIN_8)
 	);
 }
 
@@ -129,18 +129,31 @@ void MAX31856::oneShotTemperature(void)
 float MAX31856::readCJTemperature(void)
 {
 	//oneShotTemperature();
-
+	/*
 	int16_t temp16 = readRegister16(MAX31856_CJTH_REG);
 	float tempfloat = temp16;
 	tempfloat /= 256.0;
 
 	return tempfloat;
+	*/
+
+
+	int32_t temp;
+	uint8_t buf_read[2], buf_write = MAX31856_CJTH_REG;
+
+	readRegisterN(buf_write, buf_read, 2);
+
+	//Convert the registers contents into the correct value
+	temp = ((int32_t)(buf_read[0] << 6));        //Shift the MSB into place
+	temp |= ((int32_t)(buf_read[1] >> 2));        //Shift the LSB into place
+	float val = ((float)(temp / 64.0));             //Divide the binary string by 2 to the 6th power
+
+	return val;
 }
 
 float MAX31856::readTCTemperature(void)
 {
 	//oneShotTemperature();
-
 	int32_t temp24 = readRegister24(MAX31856_LTCBH_REG);
 	if (temp24 & 0x800000)
 	{
@@ -153,6 +166,40 @@ float MAX31856::readTCTemperature(void)
 	tempfloat *= 0.0078125;
 
 	return tempfloat;
+
+	/*
+	//initialize other info for the read functionality
+	int32_t temp;
+	uint8_t buf_read[3], buf_write[3] = { ADDRESS_LTCBH_READ, ADDRESS_LTCBM_READ, ADDRESS_LTCBL_READ };
+
+	spi.beginTransaction(max31856_spisettings);
+
+
+	for (int i = 0; i < 3; i++)
+	{
+		digitalWrite(spi_cs, LOW);
+		spi.write(buf_write[i]);
+		buf_read[i] = spi.transfer(0xFF);
+		digitalWrite(spi_cs, HIGH);
+	}
+
+	spi.endTransaction();
+
+
+
+	//Convert the registers contents into the correct value
+	temp = ((buf_read[0] & 0xFF) << 11);       //Shift Byte 2 into place
+	temp |= ((buf_read[1] & 0xFF) << 3);        //Shift Byte 1 into place
+	temp |= ((buf_read[2] & 0xFF) >> 5);        //Shift Byte 0 into place
+	for (byte i = 0; i < 24; i++)
+	{
+		Serial.print((temp & (1 << i)) ? "1" : "0");
+	}
+	Serial.println(" temp: " + String(temp));
+	Serial.println("temp: " + String(temp / 4096.0f));
+	float val = (temp / 128.0f);                  //Divide the binary string by 2 to the 7th power
+	return val;
+	*/
 }
 
 bool MAX31856::setColdJunctionOffset(float temperature)
