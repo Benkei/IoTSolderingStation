@@ -22,6 +22,8 @@
 #define MAX31856_CS GPIO_NUM_4
 #define MAX31856_DRDY GPIO_NUM_16
 
+#define VIB_SWITCH GPIO_NUM_33
+
 
 SPIClass hspi(HSPI);
 U8G2_SSD1306_128X64_NONAME_F_4W_HW_SPI display(U8G2_R0, OLED_CS, OLED_DC, OLED_RESET);
@@ -46,6 +48,12 @@ volatile float tcVoltageTarget = 0;
 volatile float cjTemp = 0;
 
 volatile uint16_t tipTempTarget = 0;
+
+volatile uint32_t tipLastVibration = 0;
+
+volatile uint16_t tipTempSleep = 100;
+volatile uint16_t tipSleepTime = 1; // minutes
+
 
 
 const int16_t lutTemperatur[] = {
@@ -116,8 +124,9 @@ void setup()
 	pinMode(HEAT_PIN, OUTPUT);
 	digitalWrite(HEAT_PIN, LOW);
 
-
 	pinMode(MAX31856_DRDY, INPUT);
+
+	pinMode(VIB_SWITCH, INPUT_PULLUP);
 
 	//start and configure hardware SPI
 	hspi.begin();
@@ -180,34 +189,59 @@ void setup()
 		NULL,             /* Parameter passed as input of the task */
 		1,                /* Priority of the task. */
 		NULL);            /* Task handle. */
+
+	xTaskCreate(
+		taskTipVibration,
+		"taskTipVibration",
+		1024,
+		NULL,
+		4,
+		NULL);
 }
 
 void loop()
 {
-	Setpoint = tipTempTarget;
-	Input = tcTemp;
+	//Setpoint = tipTempTarget;
+	//Input = tcTemp;
 
-	myPID.Compute();
+	//myPID.Compute();
 
-	/************************************************
-	* turn the output pin on/off based on pid output
-	************************************************/
-	if (millis() - windowStartTime > WindowSize)
-	{ //time to shift the Relay Window
-		windowStartTime += WindowSize;
-	}
-	if (Output < millis() - windowStartTime)
+
+	//// turn the output pin on/off based on pid output	
+	//if (millis() - windowStartTime > WindowSize)
+	//{
+	//	//time to shift the Relay Window
+	//	windowStartTime += WindowSize;
+	//}
+	//if (Output < millis() - windowStartTime)
+	//{
+	//	//digitalWrite(HEAT_PIN, HIGH);
+	//	heater = false;
+	//}
+	//else
+	//{
+	//	//digitalWrite(HEAT_PIN, LOW);
+	//	heater = true;
+	//}
+}
+
+void taskTipVibration(void* params)
+{
+	tipLastVibration = millis();
+	bool tipMove = false;
+	while (1)
 	{
-		//digitalWrite(HEAT_PIN, HIGH);
-		heater = false;
-	}
-	else
-	{
-		//digitalWrite(HEAT_PIN, LOW);
-		heater = true;
-	}
+		bool vib = digitalRead(VIB_SWITCH) == HIGH;
+		if (vib != tipMove)
+		{
+			tipMove = !tipMove;
+			tipLastVibration = millis();
 
-
+			Serial.println("tip moved " + String(tipLastVibration));
+		}
+		vTaskDelay(10 / portTICK_RATE_MS);
+	}
+	vTaskDelete(NULL);
 }
 
 void taskRotary(void* params)
@@ -228,11 +262,117 @@ void taskTipControl(void* params)
 
 	unsigned long tf = 0;
 	unsigned long tflast = 0;
+	bool heatTipMode = false;
+	bool readTemperature = false;
+	uint32_t readTempBegin = UINT32_MAX;
+	uint32_t heatTime = UINT32_MAX;
 
 	while (1)
 	{
 		tipTempTarget = rotary.getPosition();
 
+		bool hasTemp = digitalRead(MAX31856_DRDY) == LOW;
+
+		if (tipTempTarget == 0)
+		{
+			heatTime = UINT32_MAX;
+
+			// stop heater
+			if (digitalRead(HEAT_PIN))
+			{
+				digitalWrite(HEAT_PIN, LOW);
+				Serial.println("stop temp");
+				vTaskDelay(5 / portTICK_RATE_MS);
+			}
+
+			if (hasTemp || readTempBegin == UINT32_MAX || millis() - readTempBegin > 200)
+			{
+				auto type = tempReader.getThermocoupleType();
+
+				if (heatTipMode || readTempBegin == UINT32_MAX || type != MAX31856_ThermocoupleType::VMODE_G8)
+				{
+					heatTipMode = false;
+					SetupMAXAutoMode();
+					readTempBegin = millis();
+					continue;
+				}
+
+				tempTime = millis() - readTempBegin;
+				readTempBegin = millis();
+
+				cjTemp = tempReader.readCJTemperature();
+
+				auto fault = CheckMAXFault() & (MAX31856_FAULT_OVUV | MAX31856_FAULT_OPEN);
+				if (fault == 0) {
+					tcVoltage = tempReader.readTCTemperature();
+					tcTemp = VoltageToTemperature(tcVoltage);
+				}
+			}
+		}
+		else
+		{
+			if (heatTime == UINT32_MAX)
+			{
+				if (!heatTipMode || readTempBegin == UINT32_MAX)
+				{
+					heatTipMode = true;
+					// stop heater
+					if (digitalRead(HEAT_PIN))
+					{
+						digitalWrite(HEAT_PIN, LOW);
+						Serial.println("stop temp");
+						vTaskDelay(5 / portTICK_RATE_MS);
+					}
+
+					SetupMAXOneShotMode();
+					readTempBegin = millis();
+				}
+				else if (hasTemp || millis() - readTempBegin > 200)
+				{
+					tempTime = millis() - readTempBegin;
+					cjTemp = tempReader.readCJTemperature();
+					// error start next temp check
+					readTempBegin = UINT32_MAX;
+
+					auto fault = CheckMAXFault() & (MAX31856_FAULT_OVUV | MAX31856_FAULT_OPEN);
+					if (fault == 0) {
+						tcVoltage = tempReader.readTCTemperature();
+						tcTemp = VoltageToTemperature(tcVoltage);
+
+						uint16_t temp = tipTempSleep > tipTempTarget && (millis() - tipLastVibration) > (tipSleepTime*(60 * 1000)) ? tipTempSleep : tipTempTarget;
+						tcVoltageTarget = TemperatureToVoltage(temp);
+
+						if (tcVoltageTarget > tcVoltage)
+						{
+							float delta = sqrt(tcVoltageTarget - tcVoltage);
+							long time = (delta * 200);
+
+							heatTime = millis() + time;
+
+							// tip heating require
+							Serial.println("tip heating: " + String(tcTemp) + "/" + String(temp) + " " + String(time) + "ms");
+						}
+					}
+				}
+			}
+			if (heatTime != UINT32_MAX)
+			{
+				if (millis() < heatTime)
+				{
+					digitalWrite(HEAT_PIN, HIGH);
+				}
+				else
+				{
+					// heat done
+					digitalWrite(HEAT_PIN, LOW);
+
+					heatTime = UINT32_MAX;
+				}
+			}
+		}
+
+
+		/*
 
 		if (digitalRead(HEAT_PIN))
 		{
@@ -241,12 +381,11 @@ void taskTipControl(void* params)
 			vTaskDelay(tflast / portTICK_RATE_MS);
 		}
 
-		boolean hasTemp = digitalRead(MAX31856_DRDY) == LOW;
-
 		//Serial.println("begin temp " + String(hasTemp));
 
 		// Check and print any faults
 		uint8_t fault = tempReader.readFault();
+		bool tcFault = fault & (MAX31856_FAULT_OVUV | MAX31856_FAULT_OPEN);
 
 		if (fault)
 		{
@@ -276,7 +415,7 @@ void taskTipControl(void* params)
 		}
 
 
-		if (!hasTemp || fault)
+		if (!hasTemp)
 		{
 			if (tipTempTarget > tcTemp)
 			{
@@ -326,15 +465,17 @@ void taskTipControl(void* params)
 			//Serial.println("end temp " + String(t) + " " + String(tempReader.GetConversionMode()));
 		}
 
-		float voltage = tempReader.readTCTemperature();
-
-
-		tcTemp = VoltageToTemperature(voltage);
-		tcVoltage = voltage;
-		tcVoltageTarget = TemperatureToVoltage(tipTempTarget);
-
 		//tcTemp = tempReader.readTCTemperature();
 		cjTemp = tempReader.readCJTemperature();
+
+		if (!tcFault)
+		{
+			float voltage = tempReader.readTCTemperature();
+			tcTemp = VoltageToTemperature(voltage);
+			tcVoltage = voltage;
+			tcVoltageTarget = TemperatureToVoltage(tipTempTarget);
+		}
+
 
 		if (tcVoltageTarget > tcVoltage && fault == 0 && tipTempTarget > 0)
 			//if (tipTempTarget > tcTemp && fault == 0 && tipTempTarget > 0)
@@ -352,9 +493,59 @@ void taskTipControl(void* params)
 
 			vTaskDelay(time / portTICK_RATE_MS);
 		}
+
+		*/
 	}
 
 	vTaskDelete(NULL);
+}
+
+uint8_t CheckMAXFault() {
+	uint8_t fault = tempReader.readFault();
+	//bool tcFault = fault & (MAX31856_FAULT_OVUV | MAX31856_FAULT_OPEN);
+
+	if (fault)
+	{
+		if (fault & MAX31856_FAULT_CJRANGE) Serial.println("Cold Junction Range Fault");
+		// ignored in voltage mode.
+		//if (fault & MAX31856_FAULT_TCRANGE) Serial.println("Thermocouple Range Fault");
+		if (fault & MAX31856_FAULT_CJHIGH)  Serial.println("Cold Junction High Fault");
+		if (fault & MAX31856_FAULT_CJLOW)   Serial.println("Cold Junction Low Fault");
+		if (fault & MAX31856_FAULT_TCHIGH)  Serial.println("Thermocouple High Fault");
+		if (fault & MAX31856_FAULT_TCLOW)   Serial.println("Thermocouple Low Fault");
+		if (fault & MAX31856_FAULT_OVUV)    Serial.println("Over/Under Voltage Fault");
+		if (fault & MAX31856_FAULT_OPEN)    Serial.println("Thermocouple Open Fault");
+
+		// ignored in voltage mode.
+		fault &= ~MAX31856_FAULT_TCRANGE;
+	}
+	return fault;
+}
+
+void SetupMAXAutoMode() {
+	tempReader.SetConfiguration1Flags((CR1)(CR1::AVG_TC_SAMPLES_1 | CR1::TC_TYPE_VOLT_MODE_GAIN_8));
+
+	tempReader.SetConfiguration0Flags(
+		(CR0)(CR0::CONV_MODE_NORMALLY_ON
+			| CR0::OC_DETECT_ENABLED_R_LESS_5k
+			| CR0::COLD_JUNC_ENABLE
+			| CR0::FAULT_MODE_COMPARATOR
+			| CR0::FAULTCLR_DEFAULT_VAL
+			| CR0::FILTER_OUT_50Hz)
+	);
+}
+
+void SetupMAXOneShotMode() {
+	tempReader.SetConfiguration1Flags((CR1)(CR1::AVG_TC_SAMPLES_1 | CR1::TC_TYPE_VOLT_MODE_GAIN_8));
+
+	tempReader.SetConfiguration0Flags(
+		(CR0)(CR0::ONE_SHOT_MODE_ONE_CONVERSION
+			| CR0::OC_DETECT_ENABLED_R_LESS_5k
+			| CR0::COLD_JUNC_ENABLE
+			| CR0::FAULT_MODE_COMPARATOR
+			| CR0::FAULTCLR_DEFAULT_VAL
+			| CR0::FILTER_OUT_50Hz)
+	);
 }
 
 float VoltageToTemperature(float voltage)
