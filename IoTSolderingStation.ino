@@ -262,7 +262,7 @@ void taskTipControl(void* params)
 
 	unsigned long tf = 0;
 	unsigned long tflast = 0;
-	bool heatTipMode = false;
+	bool heatTipMode = true;
 	bool readTemperature = false;
 	uint32_t readTempBegin = UINT32_MAX;
 	uint32_t heatTime = UINT32_MAX;
@@ -294,6 +294,8 @@ void taskTipControl(void* params)
 					heatTipMode = false;
 					SetupMAXAutoMode();
 					readTempBegin = millis();
+
+					Serial.println("normal tip mode");
 					continue;
 				}
 

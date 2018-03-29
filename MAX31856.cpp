@@ -29,7 +29,7 @@ void MAX31856::begin()
 	);
 
 	SetConfiguration1Flags(
-		(CR1)(CR1::AVG_TC_SAMPLES_1 | CR1::TC_TYPE_VOLT_MODE_GAIN_8)
+		(CR1)(CR1::AVG_TC_SAMPLES_1 | CR1::TC_TYPE_K)
 	);
 }
 
