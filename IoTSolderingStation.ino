@@ -1,4 +1,3 @@
-
 #include <PID_v1.h>
 #include <U8x8lib.h>
 #include <U8g2lib.h>
@@ -13,7 +12,7 @@
 #define ROTARY_A GPIO_NUM_27
 #define ROTARY_B GPIO_NUM_26
 
-#define HEAT_PIN GPIO_NUM_25
+#define HEAT_PIN GPIO_NUM_36
 
 #define OLED_CS GPIO_NUM_2 
 #define OLED_DC GPIO_NUM_0 
@@ -25,12 +24,9 @@
 #define VIB_SWITCH GPIO_NUM_33
 
 
-SPIClass hspi(HSPI);
 U8G2_SSD1306_128X64_NONAME_F_4W_HW_SPI display(U8G2_R0, OLED_CS, OLED_DC, OLED_RESET);
-//SSD1306 display(0x3c, 5, 4);
 RotaryEncoder rotary(ROTARY_A, ROTARY_B);
-// Use software SPI: CS
-MAX31856 tempReader(MAX31856_CS, hspi);
+MAX31856 tempReader(MAX31856_CS, SPI);
 
 
 double Setpoint, Input, Output;
@@ -128,28 +124,10 @@ void setup()
 
 	pinMode(VIB_SWITCH, INPUT_PULLUP);
 
-	//start and configure hardware SPI
-	hspi.begin();
 
 	display.begin();
-	display.setFont(u8g2_font_6x10_mf);
 
 	tempReader.begin();
-	Serial.print("Thermocouple type: ");
-	switch (tempReader.getThermocoupleType())
-	{
-	case TCTYPE_B: Serial.println("B Type"); break;
-	case TCTYPE_E: Serial.println("E Type"); break;
-	case TCTYPE_J: Serial.println("J Type"); break;
-	case TCTYPE_K: Serial.println("K Type"); break;
-	case TCTYPE_N: Serial.println("N Type"); break;
-	case TCTYPE_R: Serial.println("R Type"); break;
-	case TCTYPE_S: Serial.println("S Type"); break;
-	case TCTYPE_T: Serial.println("T Type"); break;
-	case VMODE_G8: Serial.println("Voltage x8 Gain mode"); break;
-	case VMODE_G32: Serial.println("Voltage x32 Gain mode"); break;
-	default: Serial.println("Unknown"); break;
-	}
 
 
 
@@ -165,6 +143,12 @@ void setup()
 	//turn the PID on
 	myPID.SetMode(AUTOMATIC);
 
+	/* Task function. */
+	/* String with name of task. */
+	/* Stack size in words. */
+	/* Parameter passed as input of the task */
+	/* Priority of the task. */
+	/* Task handle. */
 
 	xTaskCreate(
 		taskRotary,
@@ -175,20 +159,20 @@ void setup()
 		NULL);
 
 	xTaskCreate(
-		taskDisplayRender,          /* Task function. */
-		"taskLoop",        /* String with name of task. */
-		10000,            /* Stack size in words. */
-		NULL,             /* Parameter passed as input of the task */
-		2,                /* Priority of the task. */
-		NULL);            /* Task handle. */
+		taskDisplayRender,
+		"taskLoop",
+		10000,
+		NULL,
+		2,
+		NULL);
 
 	xTaskCreate(
-		taskTipControl,          /* Task function. */
-		"taskTipControl",        /* String with name of task. */
-		1000,            /* Stack size in words. */
-		NULL,             /* Parameter passed as input of the task */
-		1,                /* Priority of the task. */
-		NULL);            /* Task handle. */
+		taskTipControl,
+		"taskTipControl",
+		1000,
+		NULL,
+		1,
+		NULL);
 
 	xTaskCreate(
 		taskTipVibration,
@@ -258,6 +242,21 @@ volatile uint32_t tempTime = 0;
 void taskTipControl(void* params)
 {
 	Serial.println("Start tip control task");
+	Serial.print("Thermocouple type: ");
+	switch (tempReader.getThermocoupleType())
+	{
+	case TCTYPE_B: Serial.println("B Type"); break;
+	case TCTYPE_E: Serial.println("E Type"); break;
+	case TCTYPE_J: Serial.println("J Type"); break;
+	case TCTYPE_K: Serial.println("K Type"); break;
+	case TCTYPE_N: Serial.println("N Type"); break;
+	case TCTYPE_R: Serial.println("R Type"); break;
+	case TCTYPE_S: Serial.println("S Type"); break;
+	case TCTYPE_T: Serial.println("T Type"); break;
+	case VMODE_G8: Serial.println("Voltage x8 Gain mode"); break;
+	case VMODE_G32: Serial.println("Voltage x32 Gain mode"); break;
+	default: Serial.println("Unknown"); break;
+	}
 	Serial.println("Tip temp time " + String(tempReader.GetConversionTime()) + "ms");
 
 	unsigned long tf = 0;
@@ -600,6 +599,8 @@ void taskDisplayRender(void* params)
 
 	uint32_t time;
 	uint16_t dtime = 0;
+
+	display.setFont(u8g2_font_6x10_mf);
 
 	while (1)
 	{
