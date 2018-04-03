@@ -12,7 +12,7 @@
 #define ROTARY_A GPIO_NUM_27
 #define ROTARY_B GPIO_NUM_26
 
-#define HEAT_PIN GPIO_NUM_36
+#define HEAT_PIN GPIO_NUM_32
 
 #define OLED_CS GPIO_NUM_2 
 #define OLED_DC GPIO_NUM_0 
@@ -340,7 +340,7 @@ void taskTipControl(void* params)
 						tcVoltage = tempReader.readTCTemperature();
 						tcTemp = VoltageToTemperature(tcVoltage);
 
-						uint16_t temp = tipTempSleep > tipTempTarget && (millis() - tipLastVibration) > (tipSleepTime*(60 * 1000)) ? tipTempSleep : tipTempTarget;
+						uint16_t temp = tipTempTarget > tipTempSleep && (millis() - tipLastVibration) > (tipSleepTime*(60 * 1000)) ? tipTempSleep : tipTempTarget;
 						tcVoltageTarget = TemperatureToVoltage(temp);
 
 						if (tcVoltageTarget > tcVoltage)
@@ -372,130 +372,7 @@ void taskTipControl(void* params)
 			}
 		}
 
-
-		/*
-
-		if (digitalRead(HEAT_PIN))
-		{
-			digitalWrite(HEAT_PIN, LOW);
-			Serial.println("stop temp");
-			vTaskDelay(tflast / portTICK_RATE_MS);
-		}
-
-		//Serial.println("begin temp " + String(hasTemp));
-
-		// Check and print any faults
-		uint8_t fault = tempReader.readFault();
-		bool tcFault = fault & (MAX31856_FAULT_OVUV | MAX31856_FAULT_OPEN);
-
-		if (fault)
-		{
-			if (fault & MAX31856_FAULT_CJRANGE) Serial.println("Cold Junction Range Fault");
-			// ignored in voltage mode.
-			//if (fault & MAX31856_FAULT_TCRANGE) Serial.println("Thermocouple Range Fault");
-			if (fault & MAX31856_FAULT_CJHIGH)  Serial.println("Cold Junction High Fault");
-			if (fault & MAX31856_FAULT_CJLOW)   Serial.println("Cold Junction Low Fault");
-			if (fault & MAX31856_FAULT_TCHIGH)  Serial.println("Thermocouple High Fault");
-			if (fault & MAX31856_FAULT_TCLOW)   Serial.println("Thermocouple Low Fault");
-			if (fault & MAX31856_FAULT_OVUV)    Serial.println("Over/Under Voltage Fault");
-			if (fault & MAX31856_FAULT_OPEN)    Serial.println("Thermocouple Open Fault");
-
-			// ignored in voltage mode.
-			fault &= ~MAX31856_FAULT_TCRANGE;
-
-			if (tf == 0 && fault & MAX31856_FAULT_OVUV)
-				tf = millis();
-		}
-
-		if (tf != 0)
-		{
-			tf = millis() - tf;
-			Serial.println("fault time " + String(tf) + "ms");
-			tflast = max(tflast, tf) * 2;
-			tf = 0;
-		}
-
-
-		if (!hasTemp)
-		{
-			if (tipTempTarget > tcTemp)
-			{
-				// stop cold junction messurment
-				tempReader.SetConfiguration0Flags(
-					(CR0)(CR0::OC_DETECT_ENABLED_R_LESS_5k
-						| CR0::COLD_JUNC_ENABLE
-						| CR0::FAULT_MODE_COMPARATOR
-						| CR0::FAULTCLR_DEFAULT_VAL
-						| CR0::FILTER_OUT_50Hz)
-				);
-			}
-			else
-			{
-				tempReader.SetConfiguration0Flags(
-					(CR0)(CR0::OC_DETECT_ENABLED_R_LESS_5k
-						| CR0::COLD_JUNC_ENABLE
-						| CR0::FAULT_MODE_COMPARATOR
-						| CR0::FAULTCLR_DEFAULT_VAL
-						| CR0::FILTER_OUT_50Hz)
-				);
-			}
-
-			//tempReader.setThermocoupleType(MAX31856_ThermocoupleType::VMODE_G8);
-			tempReader.SetConversionMode(ConversionMode::OneShot);
-
-			unsigned long t = millis();
-			while (!hasTemp)
-			{
-				//Serial.println("wait temp");
-				vTaskDelay(1);
-				hasTemp = digitalRead(MAX31856_DRDY) == LOW;
-
-				if (millis() - t > 1000)
-				{
-					Serial.println("temp timeout");
-					break;
-				}
-			}
-			t = millis() - t;
-			tempTime = t;
-
-			//vTaskDelay(tempReader.GetConversionTime() / portTICK_RATE_MS);
-
-			tempReader.SetConversionMode(ConversionMode::Off);
-
-			//Serial.println("end temp " + String(t) + " " + String(tempReader.GetConversionMode()));
-		}
-
-		//tcTemp = tempReader.readTCTemperature();
-		cjTemp = tempReader.readCJTemperature();
-
-		if (!tcFault)
-		{
-			float voltage = tempReader.readTCTemperature();
-			tcTemp = VoltageToTemperature(voltage);
-			tcVoltage = voltage;
-			tcVoltageTarget = TemperatureToVoltage(tipTempTarget);
-		}
-
-
-		if (tcVoltageTarget > tcVoltage && fault == 0 && tipTempTarget > 0)
-			//if (tipTempTarget > tcTemp && fault == 0 && tipTempTarget > 0)
-		{
-			vTaskDelay(1 / portTICK_RATE_MS);
-
-			digitalWrite(HEAT_PIN, HIGH);
-
-			//long delta = sqrt(tipTempTarget - tcTemp);
-			float delta = sqrt(tcVoltageTarget - tcVoltage);
-			long time = 40 + (delta * 200);
-
-			// tip heating require
-			Serial.println("tip heating: " + String(tcTemp) + "/" + String(tipTempTarget) + " " + String(time) + "ms");
-
-			vTaskDelay(time / portTICK_RATE_MS);
-		}
-
-		*/
+		vTaskDelay(1 / portTICK_RATE_MS);
 	}
 
 	vTaskDelete(NULL);
@@ -529,7 +406,7 @@ void SetupMAXAutoMode() {
 	tempReader.SetConfiguration0Flags(
 		(CR0)(CR0::CONV_MODE_NORMALLY_ON
 			| CR0::OC_DETECT_ENABLED_R_LESS_5k
-			| CR0::COLD_JUNC_ENABLE
+			| CR0::COLD_JUNC_DISABLE
 			| CR0::FAULT_MODE_COMPARATOR
 			| CR0::FAULTCLR_DEFAULT_VAL
 			| CR0::FILTER_OUT_50Hz)
@@ -542,7 +419,7 @@ void SetupMAXOneShotMode() {
 	tempReader.SetConfiguration0Flags(
 		(CR0)(CR0::ONE_SHOT_MODE_ONE_CONVERSION
 			| CR0::OC_DETECT_ENABLED_R_LESS_5k
-			| CR0::COLD_JUNC_ENABLE
+			| CR0::COLD_JUNC_DISABLE
 			| CR0::FAULT_MODE_COMPARATOR
 			| CR0::FAULTCLR_DEFAULT_VAL
 			| CR0::FILTER_OUT_50Hz)
